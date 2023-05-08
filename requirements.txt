@@ -1,0 +1,30 @@
+# requirements.txt
+#
+#   Replicate python environment with:
+#
+#   (on windows, in cmd.exe, using Python 3.11.x)
+#       C:\> cd {directory of project files, including this requirements.txt file}
+#       C:\path\to\project> py -m venv info607_env --upgrade-deps
+#       C:\path\to\project> .\info607_env\Scripts\activate
+#       (info607_env) C:\path\to\project> pip install -r requirements.txt
+#
+#   (on macOS/Linux, in Terminal/bash, using Python 3.11.x)
+#       $ cd ~/path/to/project/files
+#       $ python -m venv info607_env --upgrade-deps
+#       $ source ./info607_env/bin/activate
+#       (info607_env) $ pip install -r requirements.txt
+#       
+
+pymongo==4.3.3
+
+demoji>=1.1.0
+ftfy>=6.1.1
+matplotlib>=3.7
+nltk>=3.8
+numpy >= 1.24
+pandas[performance] >= 2
+regex>=2023
+scikit-learn>=1.2
+scipy>=1.10
+seaborn>=0.12
+wordcloud>=1.9
