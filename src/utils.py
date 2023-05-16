@@ -225,6 +225,54 @@ class TweetDB:
         pass
 
 
+    def count_tweets(self,
+                     collections: str|list[str],
+                     approximate: bool = False
+                     ) -> int | None:
+        """Returns a count of the number of tweets in a collection(s). 
+        Assumes collection has structure of 1 document = 1 tweet.
+
+        Args:
+            collections (str | list[str]): A collection name or list of collection names to count.
+            approximate (bool, optional): Provide an approximate count (faster but potentially 
+                less accurate). Defaults to False.
+
+        Returns:
+            int | None: The number of tweets in a collection (or sum of tweets in multiple collections).
+        """
+        if (collections is None):
+            # count whole database?
+            #  - would count documents that may not be tweets (e.g. "log" collection)
+            print("count_tweets: `collections` provided was None, not implemented for this task")
+            return None
+        elif (isinstance(collections, str)):
+            # count one collection
+            if (self.collection_exists(collections)):
+                if (approximate):
+                    return self._db[collections].estimated_document_count()
+                else:
+                    return self._db[collections].count_documents({})
+        elif (isinstance(collections, list)):
+            # count multiple collections, return their sum
+            sum = 0
+            for collection in collections:
+                if (self.collection_exists(collection)):
+                    if (approximate):
+                        sum += self._db[collection].estimated_document_count()
+                    else:
+                        sum += self._db[collection].count_documents({})
+                else:
+                    print(f"count_tweets: collection '{collection}' was not found in database, skipping it")
+                    continue
+            
+            return sum
+
+        else:
+            # other types not implemented
+            print("count_tweets: `collections` provided was not type `str` or `list`, not implemented for this task")
+            return None
+
+
 
 ########################
 #### FILE FUNCTIONS ####
