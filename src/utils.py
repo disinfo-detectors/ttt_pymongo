@@ -11,6 +11,8 @@ from typing import Any
 
 # pymongo
 import pymongo
+import pymongo.cursor
+import pymongo.database
 from pymongo import MongoClient
 
 # other data science packages
@@ -213,8 +215,70 @@ class TweetDB:
             return None
         
         
-    def query_by_field(self, query_dict: dict) -> list[dict]:
-        pass
+    def query(self, 
+              collection: str,
+              query_dict: dict,
+              return_fields: list[str]|dict[str, bool] = None,
+              limit_results: int = 0,
+              lazy: bool = True,
+              **kwargs
+              ) -> list[dict] | pymongo.cursor.Cursor | None:
+        """Submits a query to the MongoDB (function is a wrapper for PyMongo's `find`).
+        Docs for `find`: 
+            https://pymongo.readthedocs.io/en/stable/api/pymongo/collection.html#pymongo.collection.Collection.find
+
+        Comparing a MySQL query to a PyMongo query:
+
+            SELECT
+                author, text
+            FROM
+                raw
+            WHERE
+                text LIKE '%car%'
+            LIMIT 100;
+
+        In this function's form:
+
+            result = db.query(
+                collection='raw', 
+                query_dict={'text': {'$regex': 'car'} },
+                return_fields=['author', 'text'],
+                limit_results=100
+                )
+
+        Args:
+            collection (str): the name of the collection to query (collection must exist)
+            query_dict (dict): the PyMongo-friendly dictionary of query criteria
+            return_fields (list[str] | dict[str, bool], optional): a subset of fields to return. 
+                Defaults to None.
+            limit_results (int, optional): The maximum number of documents to return. When set to 0,
+                no limit is imposed. Defaults to 0.
+            lazy (bool, optional): When True, returns a PyMongo Cursor object (which acts like
+                a Python generator). When False, fully retrieves the Cursor object results as a list.
+                Defaults to True.
+
+        Returns:
+            list[dict] | pymongo.cursor.Cursor | None: The documents retreived by this query.
+        """
+        # check for whether collection exists
+        if (not self.collection_exists(collection)):
+            print(f"query: collection {collection} was not found in database, aborting query")
+            return None
+        
+        # submit the query
+        result: pymongo.cursor.Cursor = self._db.get_collection(collection).find(
+            filter=query_dict,
+            projection=return_fields,
+            limit=limit_results,
+            **kwargs
+        )
+
+        # lazy evaluate (returns a generator-like object)
+        if (lazy):
+            return result
+        else:
+            # returns a list (could be huge)
+            return [doc for doc in result]
 
 
     def update_tweets(self, tweet_list) -> Any:
