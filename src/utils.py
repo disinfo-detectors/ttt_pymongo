@@ -12,6 +12,7 @@ from typing import Any
 
 # pymongo
 import pymongo
+import pymongo.collection
 import pymongo.cursor
 import pymongo.database
 from pymongo import MongoClient
@@ -144,6 +145,10 @@ class TweetDB:
     def collection_exists(self, collection_name: str) -> bool:        
         collection_list: list[str] = self._db.list_collection_names()
         return collection_name in collection_list
+    
+    
+    def get_collection(self, collection_name: str) -> pymongo.collection.Collection:
+        return self._db.get_collection(collection_name)
     
     
     def create_collection(self, 
