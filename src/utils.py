@@ -6,6 +6,7 @@
 # imports from Python standard library
 import json
 import os
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +90,17 @@ csv_column_dtype_mapping: dict = {
     "tco2_step1": "string",
     "tco3_step1": "string"
 }
+
+
+# Note on this constant:
+#   Within 'raw' collection, average document size is 1.33 KB
+#       50,000 * 1.33 KB = Approx 67 MB per chunk
+#
+#   MongoDB data can be divided into "shards", and shards are divided into "chunks",
+#   with the default MongoDB chunk size being 128 MB. This chunk size is not
+#   directly tied to MongoDB's chunk size, but the number was chosen to try to keep
+#   chunks smaller than a MongoDB chunk.
+CHUNK_SIZE_DEFAULT = 50000  # fifty thousand tweets (documents) per operation
 
 
 ##########################
@@ -477,6 +489,37 @@ def load_raw_data(db: TweetDB,
                 print(f"load_raw_data: error loading tweets from '{data_file.name}'.")
             else:
                 pass
+
+
+#########################
+#### OTHER FUNCTIONS ####
+#########################
+
+def batched(cursor: pymongo.cursor.Cursor, 
+            chunk_size: int = CHUNK_SIZE_DEFAULT
+            ):  # -> generator
+    """A means of retrieving chunks of results from a PyMongo cursor object.
+    Based on this StackOverflow answer: https://stackoverflow.com/a/75813785/17403447
+    Note this function will be included in the standard library of next Python version (3.12)
+    using the same name: https://docs.python.org/3.12/library/itertools.html#itertools.batched
+
+    Usage:
+        >>> cursor = db.collection.find({'some': 'query'})
+        >>> for chunk in batched(cursor, chunk_size):
+        >>>     some_action(chunk)
+        >>>     # some_action is applied chunk-wise for all results of find() query
+
+    Args:
+        cursor (pymongo.cursor.Cursor): The cursor returned by a find() query.
+        chunk_size (int, optional): The number of tweets per chunk. Defaults to CHUNK_SIZE_DEFAULT.
+    """
+    # quick check of chunk_size value
+    if (chunk_size < 1):
+        raise ValueError("batched: minimum chunk_size is 1")
+    
+    cursor_as_iterator = iter(cursor)
+    while (chunk := tuple(islice(cursor_as_iterator, chunk_size))):
+        yield chunk
 
 
 #########################
