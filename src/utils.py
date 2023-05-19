@@ -15,6 +15,7 @@ import pymongo
 import pymongo.collection
 import pymongo.cursor
 import pymongo.database
+import pymongo.results
 from pymongo import MongoClient
 
 # other data science packages
@@ -216,8 +217,8 @@ class TweetDB:
         )
 
         # validate, if asked to
-        if (validate == True):
-            if (result.acknowledged == True):
+        if (validate):
+            if (result.acknowledged):
                 # simple validation on quantity of tweets reported as inserted
                 n_tweets_inserted: int = len(result.inserted_ids)
                 if (n_tweets == n_tweets_inserted):
@@ -243,6 +244,8 @@ class TweetDB:
         """Submits a query to the MongoDB (function is a wrapper for PyMongo's `find`).
         Docs for `find`: 
             https://pymongo.readthedocs.io/en/stable/api/pymongo/collection.html#pymongo.collection.Collection.find
+            https://www.mongodb.com/docs/compass/current/query/filter/
+            https://www.mongodb.com/docs/manual/reference/operator/query/
 
         Comparing a MySQL query to a PyMongo query:
 
@@ -273,6 +276,8 @@ class TweetDB:
             lazy (bool, optional): When True, returns a PyMongo Cursor object (which acts like
                 a Python generator). When False, fully retrieves the Cursor object results as a list.
                 Defaults to True.
+            
+            Additional kwargs (optional) are passed on to the PyMongo `find()` method.
 
         Returns:
             list[dict] | pymongo.cursor.Cursor | None: The documents retreived by this query.
@@ -298,8 +303,82 @@ class TweetDB:
             return [doc for doc in result]
 
 
-    def update_tweets(self, tweet_list) -> Any:
-        pass
+    def update_tweets(self, 
+                      collection: str,
+                      query_dict: dict,
+                      update_dict: dict,
+                      validate: bool = False,
+                      verbose: bool = False,
+                      **kwargs
+                      ) -> None:
+        """Update existing tweets within a given collection (function is a wrapper for PyMongo's `update_many`). 
+        Docs for `update_many`:
+            https://pymongo.readthedocs.io/en/stable/api/pymongo/collection.html#pymongo.collection.Collection.update_many
+            https://www.mongodb.com/docs/manual/reference/method/db.collection.updateMany/
+            https://www.mongodb.com/docs/manual/reference/operator/update/#update-operators-1
+
+        Comparing a MySQL alter to a PyMongo update:
+
+            UPDATE some_collection
+            SET
+                existing_column = 'new value'
+                /* , new_column = 'cant do this in MySQL because fixed schema' */
+            WHERE
+                tweet_id = '12345';
+
+        In this function's form:
+
+            update_result = db.update_tweets(
+                collection='some_collection', 
+                query_dict={'tweet_id': '12345'},
+                update_dict={
+                    '$set': {
+                        'existing_column': 'new value',
+                        'new_column': 'you *can* do this in MongoDB',
+                    },
+                }
+            )
+
+        Args:
+            collection (str): The collection containing tweets to be updated
+            query_dict (dict): A PyMongo-friendly dictionary used to find which tweets to modify
+            update_dict (dict): A PyMongo-friendly dictionary of what updates to make
+            validate (bool, optional): Performs a light validation of the update operation. 
+                If MongoDB does not 'acknowledge' the update, this function raises a RunTime error.
+                Defaults to False.
+            verbose (bool, optional): If True, prints to console a quick summary of the result of 
+                this update operation (number of tweets modified, number of tweets matched). 
+                Defaults to False.
+
+            Additional kwargs (optional) are passed on to the PyMongo `find()` method.
+
+        Raises:
+            RuntimeError: If `validate` is True and MongoDB does not acknowledge the update operation.
+
+        Returns:
+            None 
+        """
+        # check for whether collection exists
+        if (not self.collection_exists(collection)):
+            print(f"update_tweets: collection {collection} was not found in database, aborting query")
+            return None
+        
+        # submit the update
+        update_result = pymongo.results.UpdateResult = self.get_collection(collection).update_many(
+            filter=query_dict,
+            update=update_dict,
+            **kwargs
+        )
+
+        # validate result
+        if (validate and not update_result.acknowledged):
+            raise RuntimeError(f"update_tweets: update was not acknowledged (likely unsuccessful).")
+
+        # print some info on how things went
+        if (update_result.acknowledged and verbose):
+            print("update_tweets: update was acknowledged", 
+                  f"\tnumber of tweets modified: {update_result.modified_count}",
+                  f"\tnumber of tweets matched:  {update_result.matched_count}")
 
 
     def delete_tweets(self, tweet_list) -> Any:
