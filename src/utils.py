@@ -344,13 +344,13 @@ class TweetDB:
             query_dict (dict): A PyMongo-friendly dictionary used to find which tweets to modify
             update_dict (dict): A PyMongo-friendly dictionary of what updates to make
             validate (bool, optional): Performs a light validation of the update operation. 
-                If MongoDB does not 'acknowledge' the update, this function raises a RunTime error.
+                If MongoDB does not 'acknowledge' the update, this function raises a Runtime error.
                 Defaults to False.
             verbose (bool, optional): If True, prints to console a quick summary of the result of 
                 this update operation (number of tweets modified, number of tweets matched). 
                 Defaults to False.
 
-            Additional kwargs (optional) are passed on to the PyMongo `find()` method.
+            Additional kwargs (optional) are passed on to the PyMongo `update_many()` method.
 
         Raises:
             RuntimeError: If `validate` is True and MongoDB does not acknowledge the update operation.
@@ -381,8 +381,57 @@ class TweetDB:
                   f"\tnumber of tweets matched:  {update_result.matched_count}")
 
 
-    def delete_tweets(self, tweet_list) -> Any:
-        pass
+    def delete_tweets(self, 
+                      collection: str,
+                      query_dict: dict,
+                      validate: bool = False,
+                      verbose: bool = False,
+                      **kwargs
+                      ) -> None:
+        """Deletes tweets within a collection (function is a wrapper for PyMongo's `delete_many`).
+        Docs for `delete_many`:
+            https://pymongo.readthedocs.io/en/stable/api/pymongo/collection.html#pymongo.collection.Collection.delete_many
+
+        Refer to docstrings for TweetDB.query() or TweetDB.update_tweets() for information on how
+        to construct `query_dict`.
+
+        Args:
+            collection (str): The collection containing tweets to be deleted
+            query_dict (dict): A PyMongo-friendly dictionary uised to find which tweets to delete
+            validate (bool, optional): Performs a light validation of the delete operation. 
+                If MongoDB does not 'acknowledge' the update, this function raises a Runtime error.
+                Defaults to False.
+            verbose (bool, optional): If True, prints to console a quick summer of the result of
+                this delete operation (number of tweets deleted). 
+                Defaults to False.
+            
+            Additional kwargs (optional) are passed on to the PyMongo `delete_many()` method.
+
+        Raises:
+            RuntimeError: If `validate` is True and MongoDB does not acknowledge the update operation.
+
+        Returns:
+            None
+        """
+        # check for whether collection exists
+        if (not self.collection_exists(collection)):
+            print(f"delete_tweets: collection {collection} was not found in database, aborting query")
+            return None
+        
+        # attempt to delete
+        delete_result = pymongo.results.DeleteResult = self.get_collection(collection).delete_many(
+            filter=query_dict,
+            **kwargs
+        )
+
+        # validate result
+        if (validate and not delete_result.acknowledged):
+            raise RuntimeError(f"delete_tweets: delete was not acknowledged (likely unsuccessful).")
+
+        # print some info on how things went
+        if (delete_result.acknowledged and verbose):
+            print("delete_tweets: delete was acknowledged", 
+                  f"\tnumber of tweets deleted: {delete_result.deleted_count}")
 
 
     def count_tweets(self,
