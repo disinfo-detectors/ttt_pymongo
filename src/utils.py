@@ -322,7 +322,7 @@ class TweetDB:
             UPDATE some_collection
             SET
                 existing_column = 'new value'
-                /* , new_column = 'cant do this in MySQL because fixed schema' */
+                /* , new_column = 'cant do this in an UPDATE in MySQL, need an ALTER to change schema' */
             WHERE
                 tweet_id = '12345';
 
@@ -482,6 +482,24 @@ class TweetDB:
             return None
 
 
+    def count_tweets_by_filter(self,
+                               collection: str,
+                               query_dict: dict,
+                               approximate: bool = False
+                               ) -> int | None:
+        # check for whether collection exists
+        if (not self.collection_exists(collection)):
+            print(f"count_tweets_by_filter: collection {collection} was not found in database, aborting query")
+            return None
+
+        # count in one of two ways (depending on `approximate`)
+        if (approximate):
+            return self.get_collection(collection).estimated_document_count(query_dict)
+        else:
+            return self.get_collection(collection).count_documents(query_dict)
+
+    # </class TweetDB>
+
 
 ########################
 #### FILE FUNCTIONS ####
@@ -637,7 +655,7 @@ def batched(cursor: pymongo.cursor.Cursor,
     using the same name: https://docs.python.org/3.12/library/itertools.html#itertools.batched
 
     Usage:
-        >>> cursor = db.collection.find({'some': 'query'})
+        >>> cursor = db.collection.query({'some': 'query'})
         >>> for chunk in batched(cursor, chunk_size):
         >>>     some_action(chunk)
         >>>     # some_action is applied chunk-wise for all results of find() query
