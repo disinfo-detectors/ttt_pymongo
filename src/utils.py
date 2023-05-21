@@ -6,15 +6,21 @@
 # imports from Python standard library
 import json
 import os
+from itertools import islice
 from pathlib import Path
 from typing import Any
 
 # pymongo
 import pymongo
+import pymongo.collection
+import pymongo.cursor
+import pymongo.database
+import pymongo.results
 from pymongo import MongoClient
 
-# other data science packages
+# other packages
 import pandas as pd
+from tqdm import tqdm
 
 
 ###################
@@ -89,11 +95,22 @@ csv_column_dtype_mapping: dict = {
 }
 
 
+# Note on this constant:
+#   Within 'raw' collection, average document size is 1.33 KB
+#       50,000 * 1.33 KB = Approx 67 MB per chunk
+#
+#   MongoDB data can be divided into "shards", and shards are divided into "chunks",
+#   with the default MongoDB chunk size being 128 MB. This chunk size is not
+#   directly tied to MongoDB's chunk size, but the number was chosen to try to keep
+#   chunks smaller than a MongoDB chunk.
+CHUNK_SIZE_DEFAULT = 50000  # fifty thousand tweets (documents) per operation
+
+
 ##########################
 #### DATABASE WRAPPER ####
 ##########################
 
-class TweetDB:
+class TweetDB(object):
     def __init__(self,
                  db_name:str|None = None, 
                  host:str|None = None, 
@@ -130,6 +147,10 @@ class TweetDB:
     def collection_exists(self, collection_name: str) -> bool:        
         collection_list: list[str] = self._db.list_collection_names()
         return collection_name in collection_list
+    
+    
+    def get_collection(self, collection_name: str) -> pymongo.collection.Collection:
+        return self._db.get_collection(collection_name)
     
     
     def create_collection(self, 
@@ -197,8 +218,8 @@ class TweetDB:
         )
 
         # validate, if asked to
-        if (validate == True):
-            if (result.acknowledged == True):
+        if (validate):
+            if (result.acknowledged):
                 # simple validation on quantity of tweets reported as inserted
                 n_tweets_inserted: int = len(result.inserted_ids)
                 if (n_tweets == n_tweets_inserted):
@@ -213,17 +234,272 @@ class TweetDB:
             return None
         
         
-    def query_by_field(self, query_dict: dict) -> list[dict]:
-        pass
+    def query(self, 
+              collection: str,
+              query_dict: dict,
+              return_fields: list[str]|dict[str, bool] = None,
+              limit_results: int = 0,
+              lazy: bool = True,
+              **kwargs
+              ) -> list[dict] | pymongo.cursor.Cursor | None:
+        """Submits a query to the MongoDB (function is a wrapper for PyMongo's `find`).
+        Docs for `find`: 
+            https://pymongo.readthedocs.io/en/stable/api/pymongo/collection.html#pymongo.collection.Collection.find
+            https://www.mongodb.com/docs/compass/current/query/filter/
+            https://www.mongodb.com/docs/manual/reference/operator/query/
+
+        Comparing a MySQL query to a PyMongo query:
+
+            SELECT
+                author, text
+            FROM
+                raw
+            WHERE
+                text LIKE '%car%'
+            LIMIT 100;
+
+        In this function's form:
+
+            result = db.query(
+                collection='raw', 
+                query_dict={'text': {'$regex': 'car'} },
+                return_fields=['author', 'text'],
+                limit_results=100
+                )
+
+        Args:
+            collection (str): the name of the collection to query (collection must exist)
+            query_dict (dict): the PyMongo-friendly dictionary of query criteria
+            return_fields (list[str] | dict[str, bool], optional): a subset of fields to return. 
+                Defaults to None.
+            limit_results (int, optional): The maximum number of documents to return. When set to 0,
+                no limit is imposed. Defaults to 0.
+            lazy (bool, optional): When True, returns a PyMongo Cursor object (which acts like
+                a Python generator). When False, fully retrieves the Cursor object results as a list.
+                Defaults to True.
+            
+            Additional kwargs (optional) are passed on to the PyMongo `find()` method.
+
+        Returns:
+            list[dict] | pymongo.cursor.Cursor | None: The documents retreived by this query.
+        """
+        # check for whether collection exists
+        if (not self.collection_exists(collection)):
+            print(f"query: collection {collection} was not found in database, aborting query")
+            return None
+        
+        # submit the query
+        result: pymongo.cursor.Cursor = self._db.get_collection(collection).find(
+            filter=query_dict,
+            projection=return_fields,
+            limit=limit_results,
+            **kwargs
+        )
+
+        # lazy evaluate (returns a generator-like object)
+        if (lazy):
+            return result
+        else:
+            # returns a list (could be huge)
+            return [doc for doc in result]
 
 
-    def update_tweets(self, tweet_list) -> Any:
-        pass
+    def update_tweets(self, 
+                      collection: str,
+                      query_dict: dict,
+                      update_dict: dict,
+                      validate: bool = False,
+                      verbose: bool = False,
+                      **kwargs
+                      ) -> None:
+        """Update existing tweets within a given collection (function is a wrapper for PyMongo's `update_many`). 
+        Docs for `update_many`:
+            https://pymongo.readthedocs.io/en/stable/api/pymongo/collection.html#pymongo.collection.Collection.update_many
+            https://www.mongodb.com/docs/manual/reference/method/db.collection.updateMany/
+            https://www.mongodb.com/docs/manual/reference/operator/update/#update-operators-1
+
+        Comparing a MySQL alter to a PyMongo update:
+
+            UPDATE some_collection
+            SET
+                existing_column = 'new value'
+                /* , new_column = 'cant do this in an UPDATE in MySQL, need an ALTER to change schema' */
+            WHERE
+                tweet_id = '12345';
+
+        In this function's form:
+
+            update_result = db.update_tweets(
+                collection='some_collection', 
+                query_dict={'tweet_id': '12345'},
+                update_dict={
+                    '$set': {
+                        'existing_column': 'new value',
+                        'new_column': 'you *can* do this in MongoDB',
+                    },
+                }
+            )
+
+        Args:
+            collection (str): The collection containing tweets to be updated
+            query_dict (dict): A PyMongo-friendly dictionary used to find which tweets to modify
+            update_dict (dict): A PyMongo-friendly dictionary of what updates to make
+            validate (bool, optional): Performs a light validation of the update operation. 
+                If MongoDB does not 'acknowledge' the update, this function raises a Runtime error.
+                Defaults to False.
+            verbose (bool, optional): If True, prints to console a quick summary of the result of 
+                this update operation (number of tweets modified, number of tweets matched). 
+                Defaults to False.
+
+            Additional kwargs (optional) are passed on to the PyMongo `update_many()` method.
+
+        Raises:
+            RuntimeError: If `validate` is True and MongoDB does not acknowledge the update operation.
+
+        Returns:
+            None 
+        """
+        # check for whether collection exists
+        if (not self.collection_exists(collection)):
+            print(f"update_tweets: collection {collection} was not found in database, aborting query")
+            return None
+        
+        # submit the update
+        update_result: pymongo.results.UpdateResult = self.get_collection(collection).update_many(
+            filter=query_dict,
+            update=update_dict,
+            **kwargs
+        )
+
+        # validate result
+        if (validate and not update_result.acknowledged):
+            raise RuntimeError(f"update_tweets: update was not acknowledged (likely unsuccessful).")
+
+        # print some info on how things went
+        if (update_result.acknowledged and verbose):
+            print("update_tweets: update was acknowledged", 
+                  f"\n\tnumber of tweets modified: {update_result.modified_count}",
+                  f"\n\tnumber of tweets matched:  {update_result.matched_count}")
 
 
-    def delete_tweets(self, tweet_list) -> Any:
-        pass
+    def delete_tweets(self, 
+                      collection: str,
+                      query_dict: dict,
+                      validate: bool = False,
+                      verbose: bool = False,
+                      **kwargs
+                      ) -> None:
+        """Deletes tweets within a collection (function is a wrapper for PyMongo's `delete_many`).
+        Docs for `delete_many`:
+            https://pymongo.readthedocs.io/en/stable/api/pymongo/collection.html#pymongo.collection.Collection.delete_many
 
+        Refer to docstrings for TweetDB.query() or TweetDB.update_tweets() for information on how
+        to construct `query_dict`.
+
+        Args:
+            collection (str): The collection containing tweets to be deleted
+            query_dict (dict): A PyMongo-friendly dictionary uised to find which tweets to delete
+            validate (bool, optional): Performs a light validation of the delete operation. 
+                If MongoDB does not 'acknowledge' the update, this function raises a Runtime error.
+                Defaults to False.
+            verbose (bool, optional): If True, prints to console a quick summer of the result of
+                this delete operation (number of tweets deleted). 
+                Defaults to False.
+            
+            Additional kwargs (optional) are passed on to the PyMongo `delete_many()` method.
+
+        Raises:
+            RuntimeError: If `validate` is True and MongoDB does not acknowledge the update operation.
+
+        Returns:
+            None
+        """
+        # check for whether collection exists
+        if (not self.collection_exists(collection)):
+            print(f"delete_tweets: collection {collection} was not found in database, aborting query")
+            return None
+        
+        # attempt to delete
+        delete_result = pymongo.results.DeleteResult = self.get_collection(collection).delete_many(
+            filter=query_dict,
+            **kwargs
+        )
+
+        # validate result
+        if (validate and not delete_result.acknowledged):
+            raise RuntimeError(f"delete_tweets: delete was not acknowledged (likely unsuccessful).")
+
+        # print some info on how things went
+        if (delete_result.acknowledged and verbose):
+            print("delete_tweets: delete was acknowledged", 
+                  f"\tnumber of tweets deleted: {delete_result.deleted_count}")
+
+
+    def count_tweets(self,
+                     collections: str|list[str],
+                     approximate: bool = False
+                     ) -> int | None:
+        """Returns a count of the number of tweets in a collection(s). 
+        Assumes collection has structure of 1 document = 1 tweet.
+
+        Args:
+            collections (str | list[str]): A collection name or list of collection names to count.
+            approximate (bool, optional): Provide an approximate count (faster but potentially 
+                less accurate). Defaults to False.
+
+        Returns:
+            int | None: The number of tweets in a collection (or sum of tweets in multiple collections).
+        """
+        if (collections is None):
+            # count whole database?
+            #  - would count documents that may not be tweets (e.g. "log" collection)
+            print("count_tweets: `collections` provided was None, not implemented for this task")
+            return None
+        elif (isinstance(collections, str)):
+            # count one collection
+            if (self.collection_exists(collections)):
+                if (approximate):
+                    return self._db[collections].estimated_document_count()
+                else:
+                    return self._db[collections].count_documents({})
+        elif (isinstance(collections, list)):
+            # count multiple collections, return their sum
+            sum = 0
+            for collection in collections:
+                if (self.collection_exists(collection)):
+                    if (approximate):
+                        sum += self._db[collection].estimated_document_count()
+                    else:
+                        sum += self._db[collection].count_documents({})
+                else:
+                    print(f"count_tweets: collection '{collection}' was not found in database, skipping it")
+                    continue
+            
+            return sum
+
+        else:
+            # other types not implemented
+            print("count_tweets: `collections` provided was not type `str` or `list`, not implemented for this task")
+            return None
+
+
+    def count_tweets_by_filter(self,
+                               collection: str,
+                               query_dict: dict,
+                               approximate: bool = False
+                               ) -> int | None:
+        # check for whether collection exists
+        if (not self.collection_exists(collection)):
+            print(f"count_tweets_by_filter: collection {collection} was not found in database, aborting query")
+            return None
+
+        # count in one of two ways (depending on `approximate`)
+        if (approximate):
+            return self.get_collection(collection).estimated_document_count(query_dict)
+        else:
+            return self.get_collection(collection).count_documents(query_dict)
+
+    # </class TweetDB>
 
 
 ########################
@@ -365,6 +641,61 @@ def load_raw_data(db: TweetDB,
                 print(f"load_raw_data: error loading tweets from '{data_file.name}'.")
             else:
                 pass
+
+
+#########################
+#### OTHER FUNCTIONS ####
+#########################
+
+def batched(cursor: pymongo.cursor.Cursor, 
+            chunk_size: int = CHUNK_SIZE_DEFAULT,
+            show_progress_bar: bool = False,
+            progress_bar_n_chunks: int = -1
+            ):  # -> generator
+    """A means of retrieving chunks of results from a PyMongo cursor object.
+    Based on this StackOverflow answer: https://stackoverflow.com/a/75813785/17403447
+    Note this function will be included in the standard library of next Python version (3.12)
+    using the same name: https://docs.python.org/3.12/library/itertools.html#itertools.batched
+
+    Usage:
+        >>> cursor = db.collection.query({'some': 'query'})
+        >>> for chunk in batched(cursor, chunk_size):
+        >>>     some_action(chunk)
+        >>>     # some_action is applied chunk-wise for all results of find() query
+
+    Args:
+        cursor (pymongo.cursor.Cursor): The cursor returned by a find() query.
+        chunk_size (int, optional): The number of tweets per chunk. Defaults to CHUNK_SIZE_DEFAULT.
+        show_progress_bar (bool, optional): If True, prints tqdm progress bar. Requires a value for
+            `progress_bar_n_chunks` if this arg is True. 
+            Defaults to False.
+        progress_bar_n_chunks (int, optional*): Required if `show_progress_bar` is True, provides the
+            upper bound (total number of chunks) for a tqdm progress bar.
+    """
+    # quick check of chunk_size value
+    if (chunk_size < 1):
+        raise ValueError("batched: minimum chunk_size is 1")
+    
+    if (show_progress_bar and (progress_bar_n_chunks <= 0)):
+        raise ValueError("batched: if `show_progress_bar` is true, must provide value for `progress_bar_n_chunks` that is greater than 0")
+    
+    progress_bar: tqdm = None
+    if (show_progress_bar):
+        progress_bar = tqdm(
+            total=progress_bar_n_chunks,
+            leave=True,
+            desc="Number of batches"
+        )
+
+    cursor_as_iterator = iter(cursor)
+    while (chunk := tuple(islice(cursor_as_iterator, chunk_size))):
+        if (show_progress_bar): 
+            progress_bar.update()
+        yield chunk
+
+    # finally
+    if (show_progress_bar): 
+        progress_bar.close()
 
 
 #########################
