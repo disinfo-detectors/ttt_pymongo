@@ -18,8 +18,9 @@ import pymongo.database
 import pymongo.results
 from pymongo import MongoClient
 
-# other data science packages
+# other packages
 import pandas as pd
+from tqdm import tqdm
 
 
 ###################
@@ -109,7 +110,7 @@ CHUNK_SIZE_DEFAULT = 50000  # fifty thousand tweets (documents) per operation
 #### DATABASE WRAPPER ####
 ##########################
 
-class TweetDB:
+class TweetDB(object):
     def __init__(self,
                  db_name:str|None = None, 
                  host:str|None = None, 
@@ -364,7 +365,7 @@ class TweetDB:
             return None
         
         # submit the update
-        update_result = pymongo.results.UpdateResult = self.get_collection(collection).update_many(
+        update_result: pymongo.results.UpdateResult = self.get_collection(collection).update_many(
             filter=query_dict,
             update=update_dict,
             **kwargs
@@ -377,8 +378,8 @@ class TweetDB:
         # print some info on how things went
         if (update_result.acknowledged and verbose):
             print("update_tweets: update was acknowledged", 
-                  f"\tnumber of tweets modified: {update_result.modified_count}",
-                  f"\tnumber of tweets matched:  {update_result.matched_count}")
+                  f"\n\tnumber of tweets modified: {update_result.modified_count}",
+                  f"\n\tnumber of tweets matched:  {update_result.matched_count}")
 
 
     def delete_tweets(self, 
@@ -647,7 +648,9 @@ def load_raw_data(db: TweetDB,
 #########################
 
 def batched(cursor: pymongo.cursor.Cursor, 
-            chunk_size: int = CHUNK_SIZE_DEFAULT
+            chunk_size: int = CHUNK_SIZE_DEFAULT,
+            show_progress_bar: bool = False,
+            progress_bar_n_chunks: int = -1
             ):  # -> generator
     """A means of retrieving chunks of results from a PyMongo cursor object.
     Based on this StackOverflow answer: https://stackoverflow.com/a/75813785/17403447
@@ -663,14 +666,36 @@ def batched(cursor: pymongo.cursor.Cursor,
     Args:
         cursor (pymongo.cursor.Cursor): The cursor returned by a find() query.
         chunk_size (int, optional): The number of tweets per chunk. Defaults to CHUNK_SIZE_DEFAULT.
+        show_progress_bar (bool, optional): If True, prints tqdm progress bar. Requires a value for
+            `progress_bar_n_chunks` if this arg is True. 
+            Defaults to False.
+        progress_bar_n_chunks (int, optional*): Required if `show_progress_bar` is True, provides the
+            upper bound (total number of chunks) for a tqdm progress bar.
     """
     # quick check of chunk_size value
     if (chunk_size < 1):
         raise ValueError("batched: minimum chunk_size is 1")
     
+    if (show_progress_bar and (progress_bar_n_chunks <= 0)):
+        raise ValueError("batched: if `show_progress_bar` is true, must provide value for `progress_bar_n_chunks` that is greater than 0")
+    
+    progress_bar: tqdm = None
+    if (show_progress_bar):
+        progress_bar = tqdm(
+            total=progress_bar_n_chunks,
+            leave=True,
+            desc="Number of batches"
+        )
+
     cursor_as_iterator = iter(cursor)
     while (chunk := tuple(islice(cursor_as_iterator, chunk_size))):
+        if (show_progress_bar): 
+            progress_bar.update()
         yield chunk
+
+    # finally
+    if (show_progress_bar): 
+        progress_bar.close()
 
 
 #########################
