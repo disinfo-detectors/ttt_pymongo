@@ -4,6 +4,7 @@ key
 .vscode
 tests
 logs
+info607_env
 
 # Boilerplate .gitignore file from here down
 # Byte-compiled / optimized / DLL files
