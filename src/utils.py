@@ -63,6 +63,7 @@ RAW_DATA_PATHS = {
 
 COLLECTION_NAMES = {
     'raw': 'raw',
+    'merged': 'merged'
 }
 
 
@@ -382,6 +383,42 @@ class TweetDB(object):
                   f"\n\tnumber of tweets matched:  {update_result.matched_count}")
 
 
+    def copy_tweets(self,
+                    source_collection: str,
+                    source_query_dict: dict,
+                    dest_collection: str,
+                    source_fields: list[str]
+                    ) -> None:
+        """_summary_
+
+        Args:
+            source_collection (str): _description_
+            source_query_dict (dict): _description_
+            dest_collection (str): _description_
+            source_fields: (list[str]): _description_
+        """
+        # check for whether source collection exists
+        if (not self.collection_exists(source_collection)):
+            print(f"update_tweets: collection {source_collection} was not found in database, aborting query")
+            return None
+        
+        # check for whether destination collection exists
+        if (not self.collection_exists(dest_collection)):
+            print(f"update_tweets: collection {dest_collection} was not found in database, aborting query")
+            return None
+        
+        # use aggregation pipeline to perform the copy
+        pipeline = [
+            {"$match": source_query_dict},
+            {"$project": {k: 1 for k in source_fields} },
+            {"$merge": {"into": dest_collection} }
+        ]
+
+        _result = self.get_collection(source_collection).aggregate(
+            pipeline=pipeline
+        )   # returned value has no useful info
+
+
     def delete_tweets(self, 
                       collection: str,
                       query_dict: dict,
@@ -498,6 +535,55 @@ class TweetDB(object):
             return self.get_collection(collection).estimated_document_count(query_dict)
         else:
             return self.get_collection(collection).count_documents(query_dict)
+
+
+    def promote_fields(self,
+                       collection: str,
+                       query_dict: dict,
+                       field_list: list[str]
+                       ) -> None:
+        """Takes nested fields (from `field_list`) and promotes them to top-level fields.
+        
+        List `field_list` should use MongoDB dot notation for nested fields.
+        Generated field names will replace period/dot characters with double underscore.
+
+        Does not drop the old, nested fields.
+
+        Example:
+            {
+                "some_parent_field":
+                {
+                    "some_child_field": 42
+                }
+            }
+
+            Executing promote_field with `field_list`=['some_parent_field.some_child_field'] 
+            will modify document to become:
+
+            {
+                "some_parent_field":
+                {
+                    "some_child_field": 42
+                },
+                "some_parent_field__some_child_field": 42
+            }
+        """
+        field_list_renamed = [field.replace(".", "__") for field in field_list]
+        field_list_dict = {field_renamed: f"${field}" for field, field_renamed in zip(field_list, field_list_renamed)}
+
+        update_pipeline = [
+            {
+                "$addFields": field_list_dict
+            }
+        ]
+        
+        self.update_tweets(
+            collection=collection,
+            query_dict=query_dict,
+            update_dict=update_pipeline,
+            verbose=True
+        )
+
 
     # </class TweetDB>
 
