@@ -389,13 +389,14 @@ class TweetDB(object):
                     dest_collection: str,
                     source_fields: list[str]
                     ) -> None:
-        """_summary_
+        """Copies tweets matching the source_query_dict filter to the dest_collection destination.
+        Limits copy to the fields in source_fields.
 
         Args:
-            source_collection (str): _description_
-            source_query_dict (dict): _description_
-            dest_collection (str): _description_
-            source_fields: (list[str]): _description_
+            source_collection (str): the source collection
+            source_query_dict (dict): the filter for source collection
+            dest_collection (str): the destination collection
+            source_fields: (list[str]): the fields from source collection to copy
         """
         # check for whether source collection exists
         if (not self.collection_exists(source_collection)):
